@@ -32,13 +32,15 @@ export const opnformNewSubmission = createTrigger({
     if (!formId) {
       throw new Error('Form is required');
     }
-      
-    // Skip creation of integration for test webhook
-    if (webhookUrl && webhookUrl.endsWith('/test')) {
-        return;
-    }
-      
+    
+    const isTestWebhook = !!(webhookUrl && webhookUrl.endsWith('/test'));
     const flowUrl = `${ new URL(context.server.publicUrl).origin }/projects/${ context.project.id }/flows/${ context.flows.current.id }`;
+    
+    if (isTestWebhook) {
+      console.log('Test webhook detected, creating temporary integration for testing');
+    } else {
+      console.log(`Creating integration for form ${formId} with flow ${flowUrl}`);
+    }
       
     const integrationId = await opnformCommon.createIntegration(
       context.auth,
@@ -46,28 +48,46 @@ export const opnformNewSubmission = createTrigger({
       webhookUrl,
       flowUrl
     );
-    if(integrationId){
-        await context.store?.put<WebhookInformation>('_new_submission_trigger', {
-            integrationId: integrationId as number,
-        });
-    } else {
-      throw new Error('Failed to create integration');
+    
+    if(!integrationId) {
+      throw new Error('Failed to create integration: No integration ID returned');
     }
+    
+    await context.store?.put<WebhookInformation>('_new_submission_trigger', {
+        integrationId: integrationId as number,
+        isTestWebhook,
+    });
+    
+    console.log(`Successfully created trigger with integration ID: ${integrationId}${isTestWebhook ? ' (test)' : ''}`);
   },
   async onDisable(context) {
-    const response = await context.store?.get<WebhookInformation>(
-      '_new_submission_trigger'
-    );
-    if (response !== null && response !== undefined && response.integrationId) {
+    try {
+      const response = await context.store?.get<WebhookInformation>(
+        '_new_submission_trigger'
+      );
+      
+      if (!response?.integrationId) {
+        console.warn('No integration ID found in store, nothing to delete');
+        return;
+      }
+      
       const formId = context.propsValue['formId'];
       if (!formId) {
-        throw new Error('Form is required');
+        throw new Error('Form is required to delete integration');
       }
+      
+      console.log(`Deleting integration ${response.integrationId} for form ${formId}`);
+      
       await opnformCommon.deleteIntegration(
         context.auth,
         formId,
         response.integrationId
       );
+      
+      console.log('Integration successfully deleted');
+    } catch (error) {
+      console.error('Error during trigger disable:', error);
+      throw error;
     }
   },
   async run(context) {
@@ -77,4 +97,5 @@ export const opnformNewSubmission = createTrigger({
 
 interface WebhookInformation {
   integrationId: number;
+  isTestWebhook?: boolean;
 }
